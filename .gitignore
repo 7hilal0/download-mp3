@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+venv/
+ENV/
+
+# OS
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+
+# Settings
+.env
+.env.local
+
+# Download temps
+reclip_*/
+
+# Logs
+*.log
+
+# Pip bootstrap (should never be committed; venv ships pip)
+get-pip.py
+
+# yt-dlp cookie jar (sensitive; written by /api/cookies)
+cookies.txt
+
+# Build output
+dist/
+
+# Node
+node_modules/
