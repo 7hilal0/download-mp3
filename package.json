@@ -1,0 +1,32 @@
+{
+  "name": "torq-reclip",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bash dev.sh",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "@vitejs/plugin-react": "^6.0.2",
+    "dotenv": "^17.2.3",
+    "lucide-react": "^1.16.0",
+    "motion": "^12.23.24",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "vite": "^8.0.14"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.28.0",
+    "tailwindcss": "^4.1.14",
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2",
+    "vite": "^8.0.14"
+  }
+}
