@@ -1,0 +1,46 @@
+name: Deploy Maw'ed Auth Worker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "cloudflare/**"
+      - "wrangler.toml"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/worker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mawed-auth-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Deploy Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SESSION_SECRET: ${{ secrets.MAWED_SESSION_SECRET }}
+          DISCORD_CLIENT_SECRET: ${{ secrets.MAWED_DISCORD_CLIENT_SECRET }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" || (echo "Missing GitHub Actions secret: CLOUDFLARE_API_TOKEN" && exit 1)
+          test -n "$CLOUDFLARE_ACCOUNT_ID" || (echo "Missing GitHub Actions secret: CLOUDFLARE_ACCOUNT_ID" && exit 1)
+          test -n "$SESSION_SECRET" || (echo "Missing GitHub Actions secret: MAWED_SESSION_SECRET" && exit 1)
+          test -n "$DISCORD_CLIENT_SECRET" || (echo "Missing GitHub Actions secret: MAWED_DISCORD_CLIENT_SECRET" && exit 1)
+          npx --yes wrangler@4 deploy
+          printf '%s' "$SESSION_SECRET" | npx --yes wrangler@4 secret put SESSION_SECRET
+          printf '%s' "$DISCORD_CLIENT_SECRET" | npx --yes wrangler@4 secret put DISCORD_CLIENT_SECRET
