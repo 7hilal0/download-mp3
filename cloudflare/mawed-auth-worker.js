@@ -37,7 +37,7 @@ export default {
     const now=Date.now();
     await env.AUTH_DB.prepare("INSERT INTO auth_codes (user_id,username,code_hash,expires_at,attempts,created_at) VALUES (?,?,?,?,0,?)")
       .bind("state:"+nonce,"oauth-state",await sign(env.SESSION_SECRET,nonce),now+600000,now).run();
-    const state=nonce+"."+await sign(env.SESSION_SECRET,nonce+"."+now);
+    const state=nonce+"."+now+"."+await sign(env.SESSION_SECRET,nonce+"."+now);
     const callback=url.origin+"/auth/callback";
     const authorize=new URL("https://discord.com/oauth2/authorize");
     authorize.searchParams.set("client_id",env.DISCORD_CLIENT_ID);
@@ -50,12 +50,12 @@ export default {
   if(url.pathname==="/auth/callback" && request.method==="GET") {
     if(url.searchParams.has("error")) return redirect(SITE+"?login=cancelled");
     const code=url.searchParams.get("code")||"", state=url.searchParams.get("state")||"";
-    const dot=state.indexOf("."), nonce=state.slice(0,dot), signature=state.slice(dot+1);
-    if(!code||dot<1||!env.SESSION_SECRET||!env.DISCORD_CLIENT_ID||!env.DISCORD_CLIENT_SECRET||!env.AUTH_DB)
+    const parts=state.split("."), nonce=parts[0]||"", issuedAt=Number(parts[1]||0), signature=parts[2]||"";
+    if(!code||!nonce||!issuedAt||!signature||!env.SESSION_SECRET||!env.DISCORD_CLIENT_ID||!env.DISCORD_CLIENT_SECRET||!env.AUTH_DB)
       return new Response("Invalid OAuth callback.",{status:400});
     // Timestamp is bound into signature; nonce must also exist and be unexpired in D1.
     const stateRow=await env.AUTH_DB.prepare("SELECT code_hash,expires_at FROM auth_codes WHERE user_id=?").bind("state:"+nonce).first();
-    if(!stateRow||stateRow.expires_at<Date.now()||!await safeEqual(stateRow.code_hash,await sign(env.SESSION_SECRET,nonce)))
+    if(!stateRow||Date.now()-issuedAt>600000||issuedAt>Date.now()+60000||stateRow.expires_at<Date.now()||!await safeEqual(signature,await sign(env.SESSION_SECRET,nonce+"."+issuedAt))||!await safeEqual(stateRow.code_hash,await sign(env.SESSION_SECRET,nonce)))
       return new Response("OAuth state expired or already used. Please try again.",{status:400});
     // Consume state before exchanging code to prevent callback replay.
     await env.AUTH_DB.prepare("DELETE FROM auth_codes WHERE user_id=?").bind("state:"+nonce).run();
