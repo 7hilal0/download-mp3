@@ -1,0 +1,11 @@
+name = "mawed-auth"
+main = "cloudflare/mawed-auth-worker.js"
+compatibility_date = "2026-10-13"
+
+[vars]
+ALLOWED_ORIGIN = "https://7hilal0.github.io"
+
+[[d1_databases]]
+binding = "AUTH_DB"
+database_name = "mawed-auth-db"
+database_id = "74830ec9-7731-4567-9598-4c2354eef500"
