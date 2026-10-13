@@ -77,10 +77,33 @@ export default {
     if(dot<1||!env.SESSION_SECRET)return response({error:"Not signed in"},401,origin,allowed);
     const payload=token.slice(0,dot), signature=token.slice(dot+1);
     if(!await safeEqual(signature,await sign(env.SESSION_SECRET,payload)))return response({error:"Invalid session"},401,origin,allowed);
-    try { const data=JSON.parse(new TextDecoder().decode(fromB64url(payload))); if(!data.sub||data.exp<Date.now())return response({error:"Session expired"},401,origin,allowed); return response({ok:true,user:{id:data.sub,username:data.username,global_name:data.global_name,avatar:data.avatar},expires_at:data.exp},200,origin,allowed); }
-    catch { return response({error:"Invalid session"},401,origin,allowed); }
+    try {
+      const data=JSON.parse(new TextDecoder().decode(fromB64url(payload)));
+      if(!data.sub||data.exp<Date.now())return response({error:"Session expired"},401,origin,allowed);
+      const revokedKey="logout:"+await sign(env.SESSION_SECRET,token);
+      const revoked=await env.AUTH_DB.prepare("SELECT expires_at FROM auth_codes WHERE user_id=?").bind(revokedKey).first();
+      if(revoked && revoked.expires_at>Date.now())return response({error:"Session signed out"},401,origin,allowed);
+      return response({ok:true,user:{id:data.sub,username:data.username,global_name:data.global_name,avatar:data.avatar},expires_at:data.exp},200,origin,allowed);
+    } catch { return response({error:"Invalid session"},401,origin,allowed); }
   }
-  if(url.pathname==="/auth/logout" && request.method==="POST") return response({ok:true,message:"Remove the session token in this browser to sign out."},200,origin,allowed);
+  if(url.pathname==="/auth/logout" && request.method==="POST") {
+    if(origin!==allowed)return response({error:"Origin not allowed"},403,origin,allowed);
+    const token=(request.headers.get("Authorization")||"").replace(/^Bearer\\s+/i,"");
+    const dot=token.lastIndexOf(".");
+    if(dot<1||!env.SESSION_SECRET||!env.AUTH_DB)return response({ok:true},200,origin,allowed);
+    const payload=token.slice(0,dot), signature=token.slice(dot+1);
+    if(!await safeEqual(signature,await sign(env.SESSION_SECRET,payload)))return response({ok:true},200,origin,allowed);
+    try {
+      const data=JSON.parse(new TextDecoder().decode(fromB64url(payload)));
+      if(data.exp>Date.now()) {
+        const revokedKey="logout:"+await sign(env.SESSION_SECRET,token);
+        const now=Date.now();
+        await env.AUTH_DB.prepare("INSERT OR REPLACE INTO auth_codes (user_id,username,code_hash,expires_at,attempts,created_at) VALUES (?,?,?,?,0,?)")
+          .bind(revokedKey,"revoked-session",await sign(env.SESSION_SECRET,token),data.exp,now).run();
+      }
+    } catch {}
+    return response({ok:true,message:"Signed out"},200,origin,allowed);
+  }
   if(origin!==allowed)return response({error:"Origin not allowed"},403,origin,allowed);
   return response({error:"Not found"},404,origin,allowed);
  }
