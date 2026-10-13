@@ -1,6 +1,7 @@
 name = "mawed-auth"
 main = "cloudflare/mawed-auth-worker.js"
 compatibility_date = "2026-10-13"
+account_id = "7f295fba69002269e5398b25add1fb6a"
 
 [vars]
 ALLOWED_ORIGIN = "https://7hilal0.github.io"
