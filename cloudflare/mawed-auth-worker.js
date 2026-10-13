@@ -1,63 +1,87 @@
-/**
- * Maw'ed Discord verification API.
- * Multi-server-safe design: Discord usernames are not globally searchable by bots.
- * The client must supply a Discord user ID obtained from a trusted Discord OAuth2
- * flow or an interaction in a server where Maw'ed is installed. Never trust a
- * user-supplied ID alone in a production login flow; use OAuth2 identity verification.
- *
- * Current endpoints retain the DM code flow and accept userId + username, but this
- * endpoint should be connected only after the site obtains userId from Discord OAuth2.
- */
-const headers = (origin, allowed) => ({
+const encoder = new TextEncoder();
+const SITE = "https://7hilal0.github.io/download-mp3/";
+const API_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "cache-control": "no-store",
-  "access-control-allow-origin": origin === allowed ? allowed : "null",
-  "access-control-allow-methods": "POST, OPTIONS",
-  "access-control-allow-headers": "Content-Type",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "Content-Type, Authorization",
   "vary": "Origin"
-});
-const json = (body, status, origin, allowed) => new Response(JSON.stringify(body), {status, headers:headers(origin,allowed)});
-const hash = async s => {
-  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
-  return [...new Uint8Array(bytes)].map(b=>b.toString(16).padStart(2,"0")).join("");
 };
-async function discord(env,path,method="GET",body) {
-  return fetch("https://discord.com/api/v10"+path,{
-    method,
-    headers:{authorization:"Bot "+env.DISCORD_BOT_TOKEN,...(body?{"content-type":"application/json"}:{})},
-    ...(body?{body:JSON.stringify(body)}:{})
-  });
+function response(body, status=200, origin="", allowed="") {
+  return new Response(JSON.stringify(body), {status, headers:{
+    ...API_HEADERS,
+    "access-control-allow-origin": origin === allowed ? allowed : "null"
+  }});
 }
+const b64url = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+const fromB64url = s => Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")+"=".repeat((4-s.length%4)%4)),c=>c.charCodeAt(0));
+async function hmac(secret, value) {
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), {name:"HMAC",hash:"SHA-256"}, false, ["sign","verify"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC",key,encoder.encode(value)));
+}
+async function sign(secret, value) { return b64url(await hmac(secret,value)); }
+async function safeEqual(a,b) {
+  const aa=encoder.encode(a),bb=encoder.encode(b);
+  if(aa.length!==bb.length)return false;
+  let d=0;for(let i=0;i<aa.length;i++)d|=aa[i]^bb[i];return d===0;
+}
+function redirect(url) { return Response.redirect(url,302); }
 export default {
- async fetch(request,env) {
-  const url=new URL(request.url), origin=request.headers.get("Origin")||"", allowed=env.ALLOWED_ORIGIN||"";
-  if(request.method==="OPTIONS") return new Response(null,{status:204,headers:headers(origin,allowed)});
-  if(!allowed||origin!==allowed) return json({error:"Origin not allowed"},403,origin,allowed);
-  if(request.method!=="POST"||!["/auth/request","/auth/verify"].includes(url.pathname))
-    return json({error:"Not found"},404,origin,allowed);
-  if(!env.DISCORD_BOT_TOKEN||!env.CODE_PEPPER||!env.RATE_LIMIT_SALT||!env.AUTH_DB)
-    return json({error:"Authentication service is not configured"},503,origin,allowed);
-  let body;
-  try{body=await request.json()}catch{return json({error:"Invalid JSON"},400,origin,allowed)}
-  const userId=String(body.userId||"").trim();
-  if(!/^\d{17,20}$/.test(userId))
-    return json({error:"لجعل الدخول يعمل في كل السيرفرات، يجب ربط الموقع بتسجيل Discord OAuth2 للحصول على هوية المستخدم. اسم المستخدم وحده لا يمكن البحث عنه عالميًا بواسطة البوت."},400,origin,allowed);
-  const now=Date.now();
-  try{
-   const ip=request.headers.get("CF-Connecting-IP")||"unknown";
-   const ipHash=await hash(ip+env.RATE_LIMIT_SALT);
-   const recent=await env.AUTH_DB.prepare("SELECT COUNT(*) AS n FROM auth_rate WHERE ip_hash=? AND created_at>?").bind(ipHash,now-900000).first();
-   if((recent?.n||0)>=10)return json({error:"محاولات كثيرة. انتظر 15 دقيقة ثم أعد المحاولة."},429,origin,allowed);
-   await env.AUTH_DB.prepare("INSERT INTO auth_rate (ip_hash,created_at) VALUES (?,?)").bind(ipHash,now).run();
-
-   if(url.pathname==="/auth/request"){
-    // Do not allow the frontend to claim arbitrary Discord IDs. This endpoint requires
-    // a trusted OAuth2-authenticated user before it can safely DM the account.
-    if(!env.DISCORD_CLIENT_ID||!env.DISCORD_CLIENT_SECRET)
-      return json({error:"إعداد Discord OAuth2 غير مكتمل؛ لم نفعّل إرسال الأكواد بعد."},503,origin,allowed);
-    return json({error:"يلزم إكمال OAuth2 callback والتحقق من هوية Discord قبل تفعيل إرسال الأكواد."},501,origin,allowed);
-   }
-   return json({error:"التحقق غير متاح حتى يكتمل تدفق OAuth2 الآمن."},501,origin,allowed);
-  }catch(e){return json({error:e?.message||"حدث خطأ في خدمة التحقق."},400,origin,allowed)}
+ async fetch(request, env) {
+  const url=new URL(request.url), origin=request.headers.get("Origin")||"", allowed=env.ALLOWED_ORIGIN||"https://7hilal0.github.io";
+  if(request.method==="OPTIONS") return new Response(null,{status:204,headers:{...API_HEADERS,"access-control-allow-origin":origin===allowed?allowed:"null"}});
+  if(url.pathname==="/auth/login" && request.method==="GET") {
+    if(!env.DISCORD_CLIENT_ID || !env.DISCORD_CLIENT_SECRET || !env.SESSION_SECRET || !env.AUTH_DB)
+      return new Response("Discord OAuth2 is not configured yet. Add DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET and SESSION_SECRET in Worker settings.",{status:503});
+    const nonce=crypto.randomUUID().replace(/-/g,"");
+    const now=Date.now();
+    await env.AUTH_DB.prepare("INSERT INTO auth_codes (user_id,username,code_hash,expires_at,attempts,created_at) VALUES (?,?,?,?,0,?)")
+      .bind("state:"+nonce,"oauth-state",await sign(env.SESSION_SECRET,nonce),now+600000,now).run();
+    const state=nonce+"."+await sign(env.SESSION_SECRET,nonce+"."+now);
+    const callback=url.origin+"/auth/callback";
+    const authorize=new URL("https://discord.com/oauth2/authorize");
+    authorize.searchParams.set("client_id",env.DISCORD_CLIENT_ID);
+    authorize.searchParams.set("redirect_uri",callback);
+    authorize.searchParams.set("response_type","code");
+    authorize.searchParams.set("scope","identify");
+    authorize.searchParams.set("state",state);
+    return redirect(authorize.toString());
+  }
+  if(url.pathname==="/auth/callback" && request.method==="GET") {
+    if(url.searchParams.has("error")) return redirect(SITE+"?login=cancelled");
+    const code=url.searchParams.get("code")||"", state=url.searchParams.get("state")||"";
+    const dot=state.indexOf("."), nonce=state.slice(0,dot), signature=state.slice(dot+1);
+    if(!code||dot<1||!env.SESSION_SECRET||!env.DISCORD_CLIENT_ID||!env.DISCORD_CLIENT_SECRET||!env.AUTH_DB)
+      return new Response("Invalid OAuth callback.",{status:400});
+    // Timestamp is bound into signature; nonce must also exist and be unexpired in D1.
+    const stateRow=await env.AUTH_DB.prepare("SELECT code_hash,expires_at FROM auth_codes WHERE user_id=?").bind("state:"+nonce).first();
+    if(!stateRow||stateRow.expires_at<Date.now()||!await safeEqual(stateRow.code_hash,await sign(env.SESSION_SECRET,nonce)))
+      return new Response("OAuth state expired or already used. Please try again.",{status:400});
+    // Consume state before exchanging code to prevent callback replay.
+    await env.AUTH_DB.prepare("DELETE FROM auth_codes WHERE user_id=?").bind("state:"+nonce).run();
+    const tokenRes=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.DISCORD_CLIENT_ID,client_secret:env.DISCORD_CLIENT_SECRET,grant_type:"authorization_code",code,redirect_uri:url.origin+"/auth/callback"})});
+    if(!tokenRes.ok) return new Response("Discord token exchange failed. Check the OAuth redirect URL and client credentials.",{status:502});
+    const token=await tokenRes.json();
+    const userRes=await fetch("https://discord.com/api/v10/users/@me",{headers:{authorization:"Bearer "+token.access_token}});
+    if(!userRes.ok) return new Response("Could not verify your Discord account.",{status:502});
+    const user=await userRes.json();
+    const exp=Date.now()+7*24*60*60*1000;
+    const payload=b64url(encoder.encode(JSON.stringify({sub:user.id,username:user.username,global_name:user.global_name||null,avatar:user.avatar||null,exp})));
+    const session=payload+"."+await sign(env.SESSION_SECRET,payload);
+    return redirect(SITE+"#session="+encodeURIComponent(session));
+  }
+  if(url.pathname==="/auth/me" && request.method==="GET") {
+    if(origin!==allowed)return response({error:"Origin not allowed"},403,origin,allowed);
+    const token=(request.headers.get("Authorization")||"").replace(/^Bearer\s+/i,"");
+    const dot=token.lastIndexOf(".");
+    if(dot<1||!env.SESSION_SECRET)return response({error:"Not signed in"},401,origin,allowed);
+    const payload=token.slice(0,dot), signature=token.slice(dot+1);
+    if(!await safeEqual(signature,await sign(env.SESSION_SECRET,payload)))return response({error:"Invalid session"},401,origin,allowed);
+    try { const data=JSON.parse(new TextDecoder().decode(fromB64url(payload))); if(!data.sub||data.exp<Date.now())return response({error:"Session expired"},401,origin,allowed); return response({ok:true,user:{id:data.sub,username:data.username,global_name:data.global_name,avatar:data.avatar},expires_at:data.exp},200,origin,allowed); }
+    catch { return response({error:"Invalid session"},401,origin,allowed); }
+  }
+  if(url.pathname==="/auth/logout" && request.method==="POST") return response({ok:true,message:"Remove the session token in this browser to sign out."},200,origin,allowed);
+  if(origin!==allowed)return response({error:"Origin not allowed"},403,origin,allowed);
+  return response({error:"Not found"},404,origin,allowed);
  }
 };
