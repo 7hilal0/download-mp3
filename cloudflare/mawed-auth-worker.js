@@ -35,8 +35,7 @@ export default {
       return new Response("Discord OAuth2 is not configured yet. Add DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET and SESSION_SECRET in Worker settings.",{status:503});
     const nonce=crypto.randomUUID().replace(/-/g,"");
     const now=Date.now();
-    await env.AUTH_DB.prepare("INSERT INTO auth_codes (user_id,username,code_hash,expires_at,attempts,created_at) VALUES (?,?,?,?,0,?)")
-      .bind("state:"+nonce,"oauth-state",await sign(env.SESSION_SECRET,nonce),now+600000,now).run();
+    // State is self-contained and signed; no transient D1 row is required.
     const state=nonce+"."+now+"."+await sign(env.SESSION_SECRET,nonce+"."+now);
     const callback=url.origin+"/auth/callback";
     const authorize=new URL("https://discord.com/oauth2/authorize");
@@ -53,12 +52,9 @@ export default {
     const parts=state.split("."), nonce=parts[0]||"", issuedAt=Number(parts[1]||0), signature=parts[2]||"";
     if(!code||!nonce||!issuedAt||!signature||!env.SESSION_SECRET||!env.DISCORD_CLIENT_ID||!env.DISCORD_CLIENT_SECRET||!env.AUTH_DB)
       return new Response("Invalid OAuth callback.",{status:400});
-    // Timestamp is bound into signature; nonce must also exist and be unexpired in D1.
-    const stateRow=await env.AUTH_DB.prepare("SELECT code_hash,expires_at FROM auth_codes WHERE user_id=?").bind("state:"+nonce).first();
-    if(!stateRow||Date.now()-issuedAt>600000||issuedAt>Date.now()+60000||stateRow.expires_at<Date.now()||!await safeEqual(signature,await sign(env.SESSION_SECRET,nonce+"."+issuedAt))||!await safeEqual(stateRow.code_hash,await sign(env.SESSION_SECRET,nonce)))
-      return new Response("OAuth state expired or already used. Please try again.",{status:400});
-    // Consume state before exchanging code to prevent callback replay.
-    await env.AUTH_DB.prepare("DELETE FROM auth_codes WHERE user_id=?").bind("state:"+nonce).run();
+    // Signed state is valid for ten minutes and cannot be forged without SESSION_SECRET.
+    if(Date.now()-issuedAt>600000||issuedAt>Date.now()+60000||!await safeEqual(signature,await sign(env.SESSION_SECRET,nonce+"."+issuedAt)))
+      return new Response("OAuth state expired or invalid. Please start login again.",{status:400});
     const tokenRes=await fetch("https://discord.com/api/v10/oauth2/token",{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body:new URLSearchParams({client_id:env.DISCORD_CLIENT_ID,client_secret:env.DISCORD_CLIENT_SECRET,grant_type:"authorization_code",code,redirect_uri:url.origin+"/auth/callback"})});
     if(!tokenRes.ok) return new Response("Discord token exchange failed. Check the OAuth redirect URL and client credentials.",{status:502});
     const token=await tokenRes.json();
